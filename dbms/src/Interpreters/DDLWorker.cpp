@@ -331,25 +331,29 @@ void DDLWorker::processTasks()
 }
 
 
-static bool tryExecuteQuery(const String & query, Context & context, ExecutionStatus & status, Logger * log = nullptr)
+bool DDLWorker::tryExecuteQuery(const String & query, const DDLTask & task, ExecutionStatus & status)
 {
+    String query_prefix = "/*ddl_entry=" + task.entry_name + "*/ ";
+    String query_to_execute = query_prefix + query;
+
+    ReadBufferFromString istr(query_to_execute);
+    String dummy_string;
+    WriteBufferFromString ostr(dummy_string);
+
     try
     {
-        executeQuery(query, context);
+        executeQuery(istr, ostr, false, context, nullptr);
     }
     catch (...)
     {
         status = ExecutionStatus::fromCurrentException();
-
-        if (log)
-            tryLogCurrentException(log, "Query " + query + " wasn't finished successfully");
+        tryLogCurrentException(log, "Query " + query + " wasn't finished successfully");
 
         return false;
     }
 
     status = ExecutionStatus(0);
-    if (log)
-        LOG_DEBUG(log, "Executed query: " << query);
+    LOG_DEBUG(log, "Executed query: " << query);
 
     return true;
 }
@@ -375,7 +379,6 @@ void DDLWorker::processTask(DDLTask & task)
         {
             ASTPtr rewritten_ast = task.query_on_cluster->getRewrittenASTWithoutOnCluster(task.host_address.default_database);
             String rewritten_query = queryToString(rewritten_ast);
-
             LOG_DEBUG(log, "Executing query: " << rewritten_query);
 
             if (auto query_alter = dynamic_cast<const ASTAlterQuery *>(rewritten_ast.get()))
@@ -384,7 +387,7 @@ void DDLWorker::processTask(DDLTask & task)
             }
             else
             {
-                tryExecuteQuery(rewritten_query, context, current_node_execution_status, log);
+                tryExecuteQuery(rewritten_query, task, current_node_execution_status);
             }
         }
         catch (const zkutil::KeeperException & e)
@@ -490,7 +493,7 @@ void DDLWorker::processTaskAlter(
 
                 if (lock.tryLock())
                 {
-                    tryExecuteQuery(rewritten_query, context, current_node_execution_status, log);
+                    tryExecuteQuery(rewritten_query, task, current_node_execution_status);
 
                     if (execute_on_leader_replica && current_node_execution_status.code == ErrorCodes::NOT_IMPLEMENTED)
                     {
@@ -512,7 +515,7 @@ void DDLWorker::processTaskAlter(
     }
     else
     {
-        tryExecuteQuery(rewritten_query, context, current_node_execution_status, log);
+        tryExecuteQuery(rewritten_query, task, current_node_execution_status);
     }
 }
 
@@ -568,7 +571,7 @@ void DDLWorker::cleanupQueue(const Strings * node_names_to_check)
         }
         catch (...)
         {
-            tryLogCurrentException(log, "An error occured while checking and cleaning node " + node_name + " from queue");
+            LOG_INFO(log, "An error occured while checking and cleaning node " + node_name + " from queue: " + getCurrentExceptionMessage(false));
         }
     }
 }
@@ -617,7 +620,7 @@ void DDLWorker::run()
         {
             processTasks();
 
-            LOG_DEBUG(log, "Waiting watch");
+            LOG_DEBUG(log, "Waiting a watch");
             event_queue_updated->wait();
 
             if (stop_flag)
@@ -627,7 +630,7 @@ void DDLWorker::run()
         }
         catch (zkutil::KeeperException &)
         {
-            LOG_DEBUG(log, "Recovering ZooKeeper session after " << getCurrentExceptionMessage());
+            LOG_DEBUG(log, "Recovering ZooKeeper session after " << getCurrentExceptionMessage(true));
             zookeeper = context.getZooKeeper();
         }
         catch (...)
@@ -733,6 +736,15 @@ public:
         return res;
     }
 
+    Block getSampleBlock() const
+    {
+        return sample.cloneEmpty();
+    }
+
+    ~DDLQueryStatusInputSream() override = default;
+
+private:
+
     static Strings getChildrenAllowNoNode(const std::shared_ptr<zkutil::ZooKeeper> & zookeeper, const String & node_path)
     {
         Strings res;
@@ -766,8 +778,6 @@ public:
 
         return diff;
     }
-
-    ~DDLQueryStatusInputSream() override = default;
 
 private:
     String node_path;
@@ -824,7 +834,7 @@ BlockIO executeDDLQueryOnCluster(const ASTPtr & query_ptr, Context & context)
         return io;
 
     auto stream = std::make_shared<DDLQueryStatusInputSream>(node_path, entry, context);
-    io.in_sample = stream->sample.cloneEmpty();
+    io.in_sample = stream->getSampleBlock();
     io.in = std::move(stream);
     return io;
 }
