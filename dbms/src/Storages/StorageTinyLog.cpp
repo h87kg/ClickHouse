@@ -48,6 +48,7 @@ namespace ErrorCodes
     extern const int CANNOT_CREATE_DIRECTORY;
     extern const int CANNOT_READ_ALL_DATA;
     extern const int DUPLICATE_COLUMN;
+    extern const int LOGICAL_ERROR;
 }
 
 
