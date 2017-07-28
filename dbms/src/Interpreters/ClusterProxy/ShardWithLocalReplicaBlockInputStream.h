@@ -1,9 +1,11 @@
 #pragma once
 
 #include <DataStreams/IProfilingBlockInputStream.h>
+#include <Interpreters/Cluster.h>
 #include <Parsers/IAST.h>
 #include <Core/QualifiedTableName.h>
 #include <Interpreters/Context.h>
+#include <Common/Throttler.h>
 #include <Core/QueryProcessingStage.h>
 
 #include <common/logger_useful.h>
@@ -20,9 +22,14 @@ class ShardWithLocalReplicaBlockInputStream : public IProfilingBlockInputStream
 {
 public:
     ShardWithLocalReplicaBlockInputStream(
-            ASTPtr query_ast_, QualifiedTableName main_table_, Context context_,
+            const Cluster::ShardInfo & shard_info,
+            const String & query_, const ASTPtr & query_ast_, const QualifiedTableName & main_table_,
+            const Context & context_, const ThrottlerPtr & throttler_,
+            const Tables & external_tables_,
             QueryProcessingStage::Enum to_stage_)
-        : query_ast(std::move(query_ast_)), main_table(std::move(main_table_)), context(std::move(context_))
+        : query(query_), query_ast(query_ast_), main_table(main_table_)
+        , context(context_), throttler(throttler_)
+        , external_tables(external_tables_)
         , to_stage(to_stage_)
     {
     }
@@ -47,10 +54,15 @@ protected:
 private:
     Logger * log = &Logger::get("ShardWithLocalReplicaBlockInputStream");
 
+    String query;
     ASTPtr query_ast;
     QualifiedTableName main_table;
     Context context;
+    ThrottlerPtr throttler;
+    Tables external_tables;
     QueryProcessingStage::Enum to_stage;
+
+    ConnectionPoolWithFailoverPtr connection_pool = nullptr;
 
     std::mutex cancel_mutex;
     std::unique_ptr<IProfilingBlockInputStream> impl;

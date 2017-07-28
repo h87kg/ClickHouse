@@ -25,7 +25,8 @@ void SelectStreamFactory::createForShard(
         BlockInputStreams & res)
 {
     if (shard_info.isLocal())
-        res.emplace_back(std::make_shared<ShardWithLocalReplicaBlockInputStream>(query_ast, main_table, context, processed_stage));
+        res.emplace_back(std::make_shared<ShardWithLocalReplicaBlockInputStream>(
+                shard_info, query, query_ast, main_table, context, throttler, external_tables, processed_stage));
     else
     {
         auto stream = std::make_shared<RemoteBlockInputStream>(shard_info.pool, query, context, nullptr, throttler, external_tables, processed_stage);
